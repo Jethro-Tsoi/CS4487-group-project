@@ -12,15 +12,17 @@ from torch.optim.lr_scheduler import StepLR
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # Initialize the processor
-processor = ViTImageProcessor.from_pretrained('google/vit-base-patch16-224-in21k')
+model_name_or_path = 'google/vit-base-patch16-224-in21k'
+feature_extractor = ViTFeatureExtractor.from_pretrained(model_name_or_path)
 
 # Load the dataset
-train_dataset = ImageFolder('project_data/train', transform=processor)
-test_dataset = ImageFolder('project_data/val', transform=processor)
+train_dataset = ImageFolder('project_data/train', transform=feature_extractor)
+test_dataset = ImageFolder('project_data/val', transform=feature_extractor)
 
 print(f"Number of training examples: {len(train_dataset)}"
         f"\nNumber of testing examples: {len(test_dataset)}")
 print(f"Detected Classes are: {train_dataset.classes}")
+print(f"Detected Classes are: {test_dataset.classes}")
 print(f"Classes to index mapping: {train_dataset.class_to_idx}")
 print(f"Train dataset 0: {train_dataset[0]}")
 
