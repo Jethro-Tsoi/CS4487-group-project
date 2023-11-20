@@ -1,3 +1,5 @@
+import os
+import shutil
 import torch
 from torchvision import transforms
 from torch.utils.data import DataLoader
@@ -13,8 +15,15 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 processor = ViTImageProcessor.from_pretrained('google/vit-base-patch16-224-in21k')
 
 # Load the dataset
-train_dataset = ImageFolder('path_to_train_dataset', transform=processor)
-test_dataset = ImageFolder('path_to_test_dataset', transform=processor)
+train_dataset = ImageFolder('project_data/train', transform=processor)
+test_dataset = ImageFolder('project_data/val', transform=processor)
+
+print(f"Number of training examples: {len(train_dataset)}"
+        f"\nNumber of testing examples: {len(test_dataset)}")
+print(f"Detected Classes are: {train_dataset.classes}")
+print(f"Classes to index mapping: {train_dataset.class_to_idx}")
+print(f"Train dataset 0: {train_dataset[0]}")
+
 
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
@@ -40,7 +49,8 @@ for epoch in range(num_epochs):
     model.train()
     for inputs, labels in train_loader:
         # Move input and label tensors to the GPU
-        inputs, labels = inputs.to(device), labels.to(device)
+        inputs = torch.stack(inputs).to(device)
+        labels = torch.tensor(labels).to(device)
         
         optimizer.zero_grad()
         outputs = model(inputs)
