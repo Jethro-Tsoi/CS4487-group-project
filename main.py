@@ -1,75 +1,148 @@
 import os
-import shutil
 import torch
-from torchvision import transforms
-from torch.utils.data import DataLoader
+from transformers import ViTImageProcessor, ViTImageProcessor
 from torchvision.datasets import ImageFolder
-from transformers import ViTFeatureExtractor, ViTForImageClassification, ViTImageProcessor
-from torch import nn, optim
-from torch.optim.lr_scheduler import StepLR
+from torchvision.transforms import ToTensor
 
 # Check if CUDA is available and set PyTorch to use GPU or CPU accordingly
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # Initialize the processor
 model_name_or_path = 'google/vit-base-patch16-224-in21k'
-feature_extractor = ViTFeatureExtractor.from_pretrained(model_name_or_path)
-
-# Load the dataset
-train_dataset = ImageFolder('project_data/train', transform=feature_extractor)
-test_dataset = ImageFolder('project_data/val', transform=feature_extractor)
-
-print(f"Number of training examples: {len(train_dataset)}"
-        f"\nNumber of testing examples: {len(test_dataset)}")
-print(f"Detected Classes are: {train_dataset.classes}")
-print(f"Detected Classes are: {test_dataset.classes}")
-print(f"Classes to index mapping: {train_dataset.class_to_idx}")
-print(f"Train dataset 0: {train_dataset[0]}")
+processor = ViTImageProcessor.from_pretrained(model_name_or_path)
 
 
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+train_dataset = ImageFolder('project_data/train', transform=ToTensor())
+validation_dataset = ImageFolder('project_data/val', transform=ToTensor())
 
-# Load the pretrained model
-model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-224-in21k')
+print(train_dataset[0])
 
-# Modify the last layer
-num_classes = len(train_dataset.classes)
-model.classifier = nn.Linear(model.classifier.in_features, num_classes)
+example = processor(
+    train_dataset[0][0],
+    return_tensors='pt'
+)
+print(example)
+print(example['pixel_values'].shape)
 
-# Move the model to GPU
-model = model.to(device)
+import torch
 
-# Define the loss function, optimizer, and learning rate scheduler
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
-scheduler = StepLR(optimizer, step_size=7, gamma=0.1)
+# device will determine whether to run the training on GPU or CPU.
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(device)
 
-# Train the model
-num_epochs = 10
-for epoch in range(num_epochs):
-    model.train()
-    for inputs, labels in train_loader:
-        # Move input and label tensors to the GPU
-        inputs = torch.stack(inputs).to(device)
-        labels = torch.tensor(labels).to(device)
-        
-        optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs.logits, labels)
-        loss.backward()
-        optimizer.step()
-    scheduler.step()
 
-# Evaluate the model
-model.eval()
-running_corrects = 0
-with torch.no_grad():
-    for inputs, labels in test_loader:
-        inputs, labels = inputs.to(device), labels.to(device)
-        outputs = model(inputs)
-        _, preds = torch.max(outputs.logits, 1)
-        running_corrects += torch.sum(preds == labels.data)
+def preprocess(batch):
+    # take a list of PIL images and turn them into pixel values
+    inputs = processor(
+        batch[0],  # Assuming batch['img'] is the PIL image
+        return_tensors='pt'
+    )
+    # include the labels
+    inputs['label'] = torch.tensor([batch[1]])  # Assuming batch['label'] is the label
+    return inputs
 
-# Save the model
-torch.save(model.state_dict(), 'model.pth')
+# open the preprocessed datasets if preprocess/prepared_train.pt exist
+prepared_train = None
+prepared_test = None
+if os.path.exists('preprocess/prepared_train.pt'):
+    prepared_train = torch.load('preprocess/prepared_train.pt')
+    prepared_test = torch.load('preprocess/prepared_test.pt')
+else:
+    # Apply preprocess to the datasets
+    prepared_train = [preprocess(train_dataset[i]) for i in range(len(train_dataset))]
+    prepared_test = [preprocess(validation_dataset[i]) for i in range(len(validation_dataset))]
+
+    # Save the preprocessed datasets locally
+    torch.save(prepared_train, 'preprocess/prepared_train.pt')
+    torch.save(prepared_test, 'preprocess/prepared_test.pt')
+
+
+def collate_fn(batch):
+    return {
+        'pixel_values': torch.stack([x['pixel_values'] for x in batch]),
+        'labels': torch.tensor([x['label'] for x in batch])
+    }
+
+import numpy as np
+from datasets import load_metric
+
+# accuracy metric
+metric = load_metric("accuracy")
+def compute_metrics(p):
+    return metric.compute(
+        predictions=np.argmax(p.predictions, axis=1),
+        references=p.label_ids
+    )
+
+from transformers import TrainingArguments
+
+training_args = TrainingArguments(
+  output_dir="./cifar",
+  per_device_train_batch_size=16,
+  evaluation_strategy="steps",
+  num_train_epochs=4,
+  save_steps=100,
+  eval_steps=100,
+  logging_steps=10,
+  learning_rate=2e-4,
+  save_total_limit=2,
+  remove_unused_columns=False,
+  push_to_hub=False,
+  load_best_model_at_end=True,
+)
+
+from transformers import ViTForImageClassification
+
+labels = train_dataset.classes
+# print(labels)
+
+model = ViTForImageClassification.from_pretrained(
+    model_name_or_path,  # classification head
+    num_labels=len(labels),
+    id2label={str(i): c for i, c in enumerate(labels)},
+    label2id={c: str(i) for i, c in enumerate(labels)}
+)
+
+
+model.to(device)
+
+from transformers import TrainingArguments
+
+training_args = TrainingArguments(
+  output_dir="./vit-base-beans",
+  per_device_train_batch_size=16,
+  evaluation_strategy="steps",
+  num_train_epochs=4,
+  fp16=True,
+  save_steps=100,
+  eval_steps=100,
+  logging_steps=10,
+  learning_rate=2e-4,
+  save_total_limit=2,
+  remove_unused_columns=False,
+  push_to_hub=False,
+  report_to='tensorboard',
+  load_best_model_at_end=True,
+)
+
+from transformers import Trainer
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    data_collator=collate_fn,
+    compute_metrics=compute_metrics,
+    train_dataset=prepared_train,
+    eval_dataset=prepared_test,
+    tokenizer=processor,
+)
+
+train_results = trainer.train()
+trainer.save_model()
+trainer.log_metrics("train", train_results.metrics)
+trainer.save_metrics("train", train_results.metrics)
+trainer.save_state()
+
+metrics = trainer.evaluate(prepared_test)
+trainer.log_metrics("eval", metrics)
+trainer.save_metrics("eval", metrics)
